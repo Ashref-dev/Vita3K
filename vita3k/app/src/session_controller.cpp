@@ -57,7 +57,7 @@ bool AppSessionController::begin_launch(const AppLaunchRequest &launch_request, 
         return false;
     }
 
-    if (!setup_game_launch(emuenv, launch_request.app_path, update_last_time_used))
+    if (!setup_game_launch(emuenv, launch_request, update_last_time_used))
         return false;
 
     active_launch_request = launch_request;
@@ -187,7 +187,7 @@ void AppSessionController::stop(const AppSessionStopReason reason) {
     const bool needs_renderer_cleanup = renderer_was_initialized || active_frame_host.has_value();
 
     if (runtime_was_initialized) {
-        if (app_started && reason != AppSessionStopReason::LaunchFailure)
+        if (app_started && reason != AppSessionStopReason::LaunchFailure && !emuenv.direct_app)
             update_app_time_used(emuenv, emuenv.io.app_path);
 
         shutdown_app_runtime(emuenv);

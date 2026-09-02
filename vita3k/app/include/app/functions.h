@@ -22,7 +22,6 @@
 #include <util/fs.h>
 
 #include <chrono>
-#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -105,9 +104,11 @@ bool has_firmware_installed(const EmuEnvState &emuenv);
 bool ensure_current_user(EmuEnvState &emuenv);
 bool switch_emulator_path(EmuEnvState &emuenv, const fs::path &vita_fs_path);
 bool setup_game_launch(EmuEnvState &emuenv, const std::string &app_path, bool update_last_time_used = true);
+bool setup_game_launch(EmuEnvState &emuenv, const AppLaunchRequest &launch_request, bool update_last_time_used = true);
 void prepare_game_launch_overlay(EmuEnvState &emuenv);
 bool update_runtime_metrics(EmuEnvState &emuenv, LaunchRuntimeMetrics &metrics);
 void abort_game_launch(EmuEnvState &emuenv);
+void release_direct_app(EmuEnvState &emuenv);
 void request_in_process_launch(EmuEnvState &emuenv, AppLaunchRequest request);
 
 void load_users(EmuEnvState &emuenv);
