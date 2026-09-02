@@ -17,8 +17,30 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+class ReadOnlyMount;
+
+inline constexpr size_t DIRECT_APP_LICENSE_SIZE = 0x200;
+
+struct DirectAppLaunch {
+    std::shared_ptr<const ReadOnlyMount> mount;
+    std::string app_version;
+    std::string app_category;
+    std::string content_id;
+    std::string addcont;
+    std::string savedata;
+    std::string parental_level;
+    std::string short_title;
+    std::string title;
+    std::string title_id;
+    std::array<uint8_t, DIRECT_APP_LICENSE_SIZE> license{};
+};
 
 enum class AppLaunchReason {
     User,
@@ -31,4 +53,5 @@ struct AppLaunchRequest {
     std::string self_path{};
     std::vector<std::string> argv{};
     AppLaunchReason reason = AppLaunchReason::User;
+    std::shared_ptr<const DirectAppLaunch> direct_app;
 };
