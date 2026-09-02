@@ -18,14 +18,18 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <queue>
+#include <span>
 #include <string>
 
 struct AVFrame;
 struct AVPacket;
 struct AVCodecContext;
 struct AVFormatContext;
+struct AVIOContext;
 struct AVCodecParserContext;
 struct AVCodec;
 struct SwrContext;
@@ -244,11 +248,20 @@ struct AacDecoderState : public DecoderState {
     ~AacDecoderState() override;
 };
 
+struct PlayerSource {
+    std::string name;
+    uint64_t size = 0;
+    std::function<std::optional<size_t>(uint64_t, std::span<uint8_t>)> read_at;
+};
+
 struct PlayerState {
     std::string video_playing;
-    std::queue<std::string> videos_queue;
+    std::queue<PlayerSource> videos_queue;
+    PlayerSource current_source;
+    uint64_t source_cursor = 0;
 
     AVFormatContext *format{};
+    AVIOContext *avio{};
     AVCodecContext *video_context{};
     AVCodecContext *audio_context{};
     int32_t video_stream_id = -1;
@@ -270,7 +283,7 @@ struct PlayerState {
 
     void pop_video();
     void free_video();
-    void switch_video(const std::string &path);
+    void switch_video(PlayerSource source);
 
     bool next_packet(int32_t stream_id);
 
@@ -278,6 +291,7 @@ struct PlayerState {
     std::vector<uint8_t> receive_video();
 
     void queue(const std::string &path);
+    void queue(PlayerSource source);
 
     ~PlayerState();
 };
