@@ -107,6 +107,7 @@ struct ThreadState {
     uint32_t run_guest_function(Address callback_address, SceSize args = 0, const Ptr<void> argp = Ptr<void>{});
 
     void suspend();
+    bool suspend_if_running();
     void resume(bool step = false);
     std::string log_stack_traceback() const;
 
