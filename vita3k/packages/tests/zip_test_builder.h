@@ -58,6 +58,10 @@ public:
         entries_.push_back({ std::move(name), std::move(contents), std::move(options) });
     }
 
+    void with_zip64_end_records() {
+        zip64_end_records_ = true;
+    }
+
     void write(const std::filesystem::path &path) const {
         std::vector<uint8_t> bytes;
         std::vector<uint32_t> local_offsets;
@@ -110,6 +114,23 @@ public:
         }
 
         const auto central_size = static_cast<uint32_t>(bytes.size()) - central_offset;
+        if (zip64_end_records_) {
+            const auto record_offset = static_cast<uint64_t>(bytes.size());
+            append_u32(bytes, 0x06064b50);
+            append_u64(bytes, 44);
+            append_u16(bytes, 45);
+            append_u16(bytes, 45);
+            append_u32(bytes, 0);
+            append_u32(bytes, 0);
+            append_u64(bytes, entries_.size());
+            append_u64(bytes, entries_.size());
+            append_u64(bytes, central_size);
+            append_u64(bytes, central_offset);
+            append_u32(bytes, 0x07064b50);
+            append_u32(bytes, 0);
+            append_u64(bytes, record_offset);
+            append_u32(bytes, 1);
+        }
         append_u32(bytes, 0x06054b50);
         append_u16(bytes, 0);
         append_u16(bytes, 0);
@@ -165,5 +186,11 @@ private:
         append_u16(output, static_cast<uint16_t>(value >> 16));
     }
 
+    static void append_u64(std::vector<uint8_t> &output, uint64_t value) {
+        append_u32(output, static_cast<uint32_t>(value));
+        append_u32(output, static_cast<uint32_t>(value >> 32));
+    }
+
     std::vector<Entry> entries_;
+    bool zip64_end_records_ = false;
 };

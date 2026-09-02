@@ -26,10 +26,13 @@
 
 #include <packages/nonpdrm_zip_direct.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -242,6 +245,75 @@ void reads_deflated_entries_forward_and_backward() {
         throw std::runtime_error("deflated ZIP entry backward read differed");
 }
 
+void accepts_bare_and_app_prefixed_title_roots() {
+    TestContext context;
+    const std::array<std::pair<std::string, std::string>, 2> layouts{ {
+        { "PCSE01305/", "PCSE01305" },
+        { "app/PCSE00249/", "PCSE00249" },
+    } };
+    for (const auto &[prefix, expected_root] : layouts) {
+        ZipTestBuilder builder;
+        for (size_t slash = prefix.find('/'); slash != std::string::npos; slash = prefix.find('/', slash + 1))
+            builder.add(prefix.substr(0, slash + 1));
+        builder.add(prefix + "sce_sys/param.sfo", make_sfo("PCSE01305"));
+        builder.add(prefix + "eboot.bin", "boot");
+        auto source = packages::detail::NoNpDrmZipSource::create(context.write(builder), 4096);
+        if (!source)
+            throw std::runtime_error("layout " + prefix + " was rejected: " + source.error().message);
+        if ((*source)->title_root() != expected_root)
+            throw std::runtime_error("layout " + prefix + " resolved title root " + (*source)->title_root());
+
+        std::array<uint8_t, 4> content{};
+        if (auto read = (*source)->read_at("eboot.bin", 0, content); !read
+            || content != std::array<uint8_t, 4>{ 'b', 'o', 'o', 't' })
+            throw std::runtime_error("layout " + prefix + " could not read eboot.bin at the title root");
+        if (!(*source)->read_small_file("sce_sys/param.sfo", 4096))
+            throw std::runtime_error("layout " + prefix + " could not read param.sfo at the title root");
+    }
+}
+
+void accepts_zip64_end_records_before_the_end_record() {
+    TestContext context;
+    ZipTestBuilder builder;
+    builder.with_zip64_end_records();
+    builder.add("PCSE01305/sce_sys/param.sfo", make_sfo("PCSE01305"));
+    builder.add("PCSE01305/eboot.bin", "boot");
+    const auto path = context.write(builder);
+    auto source = packages::detail::NoNpDrmZipSource::create(path, 4096);
+    if (!source)
+        throw std::runtime_error("ZIP64 end records were rejected: " + source.error().message);
+    std::array<uint8_t, 4> content{};
+    if (auto read = (*source)->read_at("eboot.bin", 0, content); !read
+        || content != std::array<uint8_t, 4>{ 'b', 'o', 'o', 't' })
+        throw std::runtime_error("ZIP64 archive could not be read");
+
+    std::vector<uint8_t> bytes;
+    {
+        std::ifstream input(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    }
+    const std::array<uint8_t, 4> signature{ 'P', 'K', 0x06, 0x06 };
+    const auto found = std::search(bytes.begin(), bytes.end(), signature.begin(), signature.end());
+    if (found == bytes.end())
+        throw std::runtime_error("ZIP64 end record fixture was not emitted");
+    *(found + 3) = 0x07;
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    auto corrupted = packages::detail::NoNpDrmZipSource::create(path, 4096);
+    if (corrupted)
+        throw std::runtime_error("archive with an unexplained end record gap was accepted");
+    require_code(corrupted.error(), packages::NoNpDrmZipErrorCode::invalid_zip);
+}
+
+void rejects_multiple_title_roots_under_a_shared_app_folder() {
+    ZipTestBuilder builder;
+    builder.add("app/PCSE00249/sce_sys/param.sfo", make_sfo("PCSE01305"));
+    builder.add("app/PCSE00250/eboot.bin", "x");
+    require_code(TestContext{}.open_error(builder), packages::NoNpDrmZipErrorCode::multiple_roots);
+}
+
 void rejects_sfo_install_directory_traversal() {
     ZipTestBuilder builder;
     builder.add("TITLE/sce_sys/package/work.bin", make_license("UP0438-PCSE01305_00-0000000000000001"));
@@ -352,7 +424,7 @@ void validates_deep_hash_tree_without_recursion() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 18> tests{ {
+    const std::array<Test, 21> tests{ {
         { "rejects_empty_archives", rejects_empty_archives },
         { "rejects_absolute_and_parent_paths", rejects_absolute_and_parent_paths },
         { "rejects_nul_in_entry_name", rejects_nul_in_entry_name },
@@ -363,6 +435,9 @@ int main() {
         { "rejects_mismatched_local_header_names", rejects_mismatched_local_header_names },
         { "accepts_utf8_entry_names", accepts_utf8_entry_names },
         { "reads_deflated_entries_forward_and_backward", reads_deflated_entries_forward_and_backward },
+        { "accepts_bare_and_app_prefixed_title_roots", accepts_bare_and_app_prefixed_title_roots },
+        { "accepts_zip64_end_records_before_the_end_record", accepts_zip64_end_records_before_the_end_record },
+        { "rejects_multiple_title_roots_under_a_shared_app_folder", rejects_multiple_title_roots_under_a_shared_app_folder },
         { "rejects_sfo_install_directory_traversal", rejects_sfo_install_directory_traversal },
         { "rejects_out_of_bounds_sfo_entries", rejects_out_of_bounds_sfo_entries },
         { "rejects_nul_in_sfo_install_directories", rejects_nul_in_sfo_install_directories },
