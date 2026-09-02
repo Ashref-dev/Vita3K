@@ -44,6 +44,35 @@ uint32_t read_u32(std::span<const uint8_t> bytes, size_t offset) {
         | static_cast<uint32_t>(read_u16(bytes, offset + 2)) << 16;
 }
 
+uint64_t read_u64(std::span<const uint8_t> bytes, size_t offset) {
+    return static_cast<uint64_t>(read_u32(bytes, offset))
+        | static_cast<uint64_t>(read_u32(bytes, offset + 4)) << 32;
+}
+
+// Writers such as Info-ZIP emit ZIP64 end records even when every field still fits in 32 bits, which
+// leaves the central directory and the end record non-adjacent.
+std::expected<void, NoNpDrmZipError> validate_zip64_end_records(
+    std::span<const uint8_t> tail, uint64_t tail_base, uint64_t central_end, uint64_t record_offset) {
+    constexpr uint64_t kZip64LocatorSize = 20;
+    constexpr uint64_t kZip64RecordPrefixSize = 12;
+    const auto inconsistent = [] {
+        return std::unexpected(NoNpDrmZipError{ NoNpDrmZipErrorCode::invalid_zip,
+            "ZIP central directory bounds are inconsistent" });
+    };
+    if (central_end < tail_base || record_offset - central_end < kZip64RecordPrefixSize + kZip64LocatorSize)
+        return inconsistent();
+    const auto record_index = static_cast<size_t>(central_end - tail_base);
+    if (read_u32(tail, record_index) != 0x06064b50)
+        return inconsistent();
+    const auto record_size = read_u64(tail, record_index + 4);
+    if (record_size > record_offset - central_end
+        || central_end + kZip64RecordPrefixSize + record_size + kZip64LocatorSize != record_offset)
+        return inconsistent();
+    if (read_u32(tail, static_cast<size_t>(record_offset - kZip64LocatorSize - tail_base)) != 0x07064b50)
+        return inconsistent();
+    return {};
+}
+
 std::string fold_path(std::string_view path) {
     std::string folded(path);
     std::transform(folded.begin(), folded.end(), folded.begin(), [](unsigned char value) {
@@ -79,14 +108,18 @@ std::expected<std::vector<std::string>, NoNpDrmZipError> normalize_segments(std:
     return segments;
 }
 
-std::string join_segments(const std::vector<std::string> &segments, size_t first) {
+std::string join_segments(const std::vector<std::string> &segments, size_t first, size_t last) {
     std::string path;
-    for (size_t index = first; index < segments.size(); ++index) {
+    for (size_t index = first; index < last; ++index) {
         if (!path.empty())
             path.push_back('/');
         path += segments[index];
     }
     return path;
+}
+
+std::string join_segments(const std::vector<std::string> &segments, size_t first) {
+    return join_segments(segments, first, segments.size());
 }
 
 NoNpDrmZipError zip_error(NoNpDrmZipErrorCode code, std::string message) {
@@ -185,9 +218,45 @@ std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::validate_archive_bounds()
     if (entries == 0 || entries > kMaximumEntryCount || central_size > kMaximumCentralDirectorySize)
         return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "ZIP directory exceeds fixed bounds"));
     const auto record_file_offset = snapshot_.size - tail.size() + offset;
-    if (static_cast<uint64_t>(central_offset) + central_size != record_file_offset)
+    const auto central_end = static_cast<uint64_t>(central_offset) + central_size;
+    if (central_end > record_file_offset)
         return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "ZIP central directory bounds are inconsistent"));
+    if (central_end != record_file_offset)
+        return validate_zip64_end_records(tail, snapshot_.size - tail.size(), central_end, record_file_offset);
     return {};
+}
+
+std::expected<std::string, NoNpDrmZipError> NoNpDrmZipSource::read_entry_name(uint32_t index) const {
+    const auto size = mz_zip_reader_get_filename(&archive_, index, nullptr, 0);
+    if (size <= 1 || size > kMaximumEntryNameSize + 1)
+        return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_path, "ZIP entry name exceeds fixed bound"));
+    std::vector<char> buffer(size);
+    if (mz_zip_reader_get_filename(&archive_, index, buffer.data(), size) != size)
+        return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "failed to read complete ZIP entry name"));
+    return std::string(buffer.data(), size - 1);
+}
+
+// Archives without a param.sfo fall back to one segment so malformed inputs keep their original error.
+std::expected<size_t, NoNpDrmZipError> NoNpDrmZipSource::find_root_depth(uint32_t count) const {
+    size_t depth = 1;
+    bool found = false;
+    for (uint32_t index = 0; index < count; ++index) {
+        auto name = read_entry_name(index);
+        if (!name)
+            return std::unexpected(name.error());
+        auto segments = normalize_segments(*name);
+        if (!segments)
+            return std::unexpected(segments.error());
+        const auto size = segments->size();
+        if (size < 3 || fold_path((*segments)[size - 2]) != "sce_sys"
+            || fold_path((*segments)[size - 1]) != "param.sfo")
+            continue;
+        if (!found || size - 2 < depth) {
+            depth = size - 2;
+            found = true;
+        }
+    }
+    return depth;
 }
 
 std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::initialize(uint64_t maximum_small_metadata_size) {
@@ -202,19 +271,21 @@ std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::initialize(uint64_t maxim
     if (count == 0 || count > kMaximumEntryCount)
         return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "ZIP entry count exceeds fixed bounds"));
 
+    const auto root_depth = find_root_depth(count);
+    if (!root_depth)
+        return std::unexpected(root_depth.error());
+
+    std::string folded_root;
     std::set<std::string> seen_paths;
     std::set<std::string> directory_paths;
     for (uint32_t index = 0; index < count; ++index) {
         mz_zip_archive_file_stat stat{};
         if (!mz_zip_reader_file_stat(&archive_, index, &stat))
             return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "failed to read ZIP entry metadata"));
-        const auto name_buffer_size = mz_zip_reader_get_filename(&archive_, index, nullptr, 0);
-        if (name_buffer_size <= 1 || name_buffer_size > kMaximumEntryNameSize + 1)
-            return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_path, "ZIP entry name exceeds fixed bound"));
-        std::vector<char> name_buffer(name_buffer_size);
-        if (mz_zip_reader_get_filename(&archive_, index, name_buffer.data(), name_buffer_size) != name_buffer_size)
-            return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_zip, "failed to read complete ZIP entry name"));
-        const std::string_view raw_name(name_buffer.data(), name_buffer_size - 1);
+        auto entry_name = read_entry_name(index);
+        if (!entry_name)
+            return std::unexpected(entry_name.error());
+        const std::string_view raw_name(*entry_name);
         if (raw_name.find('\0') != std::string_view::npos)
             return std::unexpected(zip_error(NoNpDrmZipErrorCode::invalid_path, "NUL in ZIP entry name"));
         if (stat.m_is_encrypted || (stat.m_bit_flag & 1) != 0)
@@ -225,18 +296,21 @@ std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::initialize(uint64_t maxim
         auto segments = normalize_segments(raw_name);
         if (!segments)
             return std::unexpected(segments.error());
-        const auto folded_root = fold_path((*segments)[0]);
-        if (title_root_.empty())
-            title_root_ = (*segments)[0];
-        else if (fold_path(title_root_) != folded_root)
+        const auto folded_prefix = fold_path(join_segments(*segments, 0, std::min(segments->size(), *root_depth)));
+        if (!folded_root.empty() && folded_root != folded_prefix
+            && !folded_root.starts_with(folded_prefix + '/') && !folded_prefix.starts_with(folded_root + '/'))
             return std::unexpected(zip_error(NoNpDrmZipErrorCode::multiple_roots, "ZIP contains multiple title roots"));
+        if (folded_prefix.size() > folded_root.size())
+            folded_root = folded_prefix;
+        if (segments->size() <= *root_depth)
+            continue;
+        if (title_root_.empty())
+            title_root_ = (*segments)[*root_depth - 1];
 
-        const auto logical_path = join_segments(*segments, 1);
+        const auto logical_path = join_segments(*segments, *root_depth);
         const auto folded_logical_path = fold_path(logical_path);
         if (!seen_paths.insert(folded_logical_path).second)
             return std::unexpected(zip_error(NoNpDrmZipErrorCode::duplicate_path, "duplicate normalized ZIP path: " + logical_path));
-        if (logical_path.empty())
-            continue;
         if ((folded_logical_path == "sce_sys/param.sfo" || folded_logical_path == "sce_sys/package/work.bin")
             && stat.m_uncomp_size > maximum_small_metadata_size)
             return std::unexpected(zip_error(NoNpDrmZipErrorCode::metadata_too_large, "small metadata entry exceeds configured bound"));

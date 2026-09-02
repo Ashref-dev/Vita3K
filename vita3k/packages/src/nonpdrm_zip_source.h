@@ -78,6 +78,8 @@ private:
 
     std::expected<void, NoNpDrmZipError> initialize(uint64_t maximum_small_metadata_size);
     std::expected<void, NoNpDrmZipError> validate_archive_bounds();
+    std::expected<std::string, NoNpDrmZipError> read_entry_name(uint32_t index) const;
+    std::expected<size_t, NoNpDrmZipError> find_root_depth(uint32_t count) const;
     std::expected<uint64_t, NoNpDrmZipError> parse_data_offset(
         const mz_zip_archive_file_stat &stat, std::string_view archive_name);
     std::expected<void, NoNpDrmZipError> check_unchanged_unlocked() const;
