@@ -28,6 +28,7 @@
 #include <kernel/state.h>
 #include <mem/state.h>
 #include <sstream>
+#include <vector>
 
 // Sockets
 #ifdef _WIN32
@@ -438,13 +439,16 @@ static std::string cmd_continue(EmuEnvState &state, PacketCommand &command) {
             // step or run that thread
 
             if (state.gdb.inferior_thread != 0) {
-                const auto guard = std::lock_guard(state.kernel.mutex);
-                auto thread = state.kernel.threads[state.gdb.inferior_thread];
-                auto thread_lock = std::unique_lock(thread->mutex);
+                ThreadStatePtr thread;
+                {
+                    const auto guard = std::lock_guard(state.kernel.mutex);
+                    thread = state.kernel.threads.at(state.gdb.inferior_thread);
+                }
                 thread->resume(step);
                 if (step) {
                     // Wait until it finish stepping
                     // TODO if that thread waits for sync primitive, dead lock.
+                    auto thread_lock = std::unique_lock(thread->mutex);
                     thread->status_cond.wait(thread_lock, [&]() { return thread->status == ThreadStatus::suspend; });
                 }
             }
@@ -459,8 +463,6 @@ static std::string cmd_continue(EmuEnvState &state, PacketCommand &command) {
                             lock.unlock();
                             thread->resume();
                             lock.lock();
-
-                            thread->status_cond.wait(lock, [&]() { return thread->status != ThreadStatus::suspend; });
                         }
                     }
                 }
@@ -491,15 +493,17 @@ static std::string cmd_continue(EmuEnvState &state, PacketCommand &command) {
                 LOG_INFO("{}", thread->log_stack_traceback());
 
                 // stop the world
+                std::vector<ThreadStatePtr> running_threads;
                 {
-                    auto lock = std::unique_lock(state.kernel.mutex);
-                    for (const auto &pair : state.kernel.threads) {
-                        auto thread = pair.second;
-                        if (thread->status == ThreadStatus::run) {
-                            thread->suspend();
-                            thread->status_cond.wait(lock, [=]() { return thread->status == ThreadStatus::suspend || thread->status == ThreadStatus::dormant; });
-                        }
-                    }
+                    const auto lock = std::lock_guard(state.kernel.mutex);
+                    for (const auto &pair : state.kernel.threads)
+                        running_threads.push_back(pair.second);
+                }
+                for (const auto &thread : running_threads) {
+                    if (!thread->suspend_if_running())
+                        continue;
+                    auto thread_lock = std::unique_lock(thread->mutex);
+                    thread->status_cond.wait(thread_lock, [&]() { return thread->status == ThreadStatus::suspend || thread->status == ThreadStatus::dormant; });
                 }
             }
 
