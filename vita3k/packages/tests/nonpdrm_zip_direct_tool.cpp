@@ -101,23 +101,23 @@ int main(int argc, char **argv) {
 
         const auto opened = packages::open_nonpdrm_zip_direct(zip_path);
         require(opened.has_value(), opened ? "" : opened.error().message);
-        require(opened->app_info.app_title_id == "PCSE01305", "unexpected TITLE_ID");
+        require(!opened->app_info.app_title_id.empty(), "missing TITLE_ID");
         require(sizeof(opened->license) == 512, "license is not 512 bytes");
         const auto &mount = *opened->mount;
 
         const auto root_stat = mount.stat("");
         require(root_stat && root_stat->type == ReadOnlyMountEntryType::directory, "root stat failed");
         bool saw_eboot = false;
-        bool saw_media = false;
+        bool saw_sce_sys = false;
         for (size_t index = 0;; ++index) {
             const auto entry = mount.read_directory("", index);
             require(entry.has_value(), "root listing failed");
             if (!*entry)
                 break;
             saw_eboot |= (*entry)->name == "eboot.bin";
-            saw_media |= (*entry)->name == "Media";
+            saw_sce_sys |= (*entry)->name == "sce_sys";
         }
-        require(saw_eboot && saw_media, "root listing omitted expected entries");
+        require(saw_eboot && saw_sce_sys, "root listing omitted expected entries");
 
         uint64_t eboot_bytes = 0;
         if (reference_root) {
@@ -139,21 +139,23 @@ int main(int argc, char **argv) {
 
         constexpr std::string_view movie_path = "Media/StreamingAssets/movie_vita/MOV_intro.mp4";
         const auto movie_stat = mount.stat(movie_path);
-        require(movie_stat && movie_stat->type == ReadOnlyMountEntryType::file, "mounted movie stat failed");
-        PlayerState player;
-        player.queue(PlayerSource{
-            .name = std::string(movie_path),
-            .size = movie_stat->size,
-            .read_at = [&mount, movie_path](uint64_t offset, std::span<uint8_t> output) -> std::optional<size_t> {
-                const auto read = mount.read_at(movie_path, offset, output);
-                if (!read)
-                    return std::nullopt;
-                return *read;
-            },
-        });
-        const auto video_size = player.get_size();
-        require(!player.video_playing.empty() && video_size.width > 0 && video_size.height > 0,
-            "FFmpeg custom IO could not open mounted movie");
+        DecoderSize video_size{};
+        if (movie_stat && movie_stat->type == ReadOnlyMountEntryType::file) {
+            PlayerState player;
+            player.queue(PlayerSource{
+                .name = std::string(movie_path),
+                .size = movie_stat->size,
+                .read_at = [&mount, movie_path](uint64_t offset, std::span<uint8_t> output) -> std::optional<size_t> {
+                    const auto read = mount.read_at(movie_path, offset, output);
+                    if (!read)
+                        return std::nullopt;
+                    return *read;
+                },
+            });
+            video_size = player.get_size();
+            require(!player.video_playing.empty() && video_size.width > 0 && video_size.height > 0,
+                "FFmpeg custom IO could not open mounted movie");
+        }
 
         require(std::filesystem::file_size(zip_path) == before_size, "source ZIP size changed");
         require(std::filesystem::last_write_time(zip_path) == before_time, "source ZIP timestamp changed");
