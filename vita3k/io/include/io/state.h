@@ -18,10 +18,12 @@
 #pragma once
 
 #include <io/filesystem.h>
+#include <io/read_only_mount.h>
 #include <io/types.h>
 #include <io/util.h>
 
 #include <map>
+#include <memory>
 #include <unordered_map>
 
 // Class for all needed information to access files on Vita3K.
@@ -98,6 +100,29 @@ typedef std::map<SceUID, TtyType> TtyFiles;
 typedef std::map<SceUID, FileStats> StdFiles;
 typedef std::map<SceUID, DirStats> DirEntries;
 
+struct MountedFile {
+    std::shared_ptr<const ReadOnlyMount> mount;
+    std::string path;
+    uint64_t size;
+    uint64_t cursor = 0;
+    std::mutex mutex;
+
+    [[nodiscard]] SceSize next_read_size(SceSize read_size) const;
+    SceOff read(void *data, SceSize read_size);
+    bool seek(SceOff offset, SceIoSeekMode seek_mode);
+    [[nodiscard]] SceOff tell() const;
+};
+
+struct MountedDirectory {
+    std::shared_ptr<const ReadOnlyMount> mount;
+    std::string path;
+    size_t cursor = 0;
+    std::mutex mutex;
+};
+
+using MountedFiles = std::map<SceUID, std::shared_ptr<MountedFile>>;
+using MountedDirectories = std::map<SceUID, std::shared_ptr<MountedDirectory>>;
+
 struct IOState {
     struct DevicePaths {
         std::string app0;
@@ -120,6 +145,12 @@ struct IOState {
     TtyFiles tty_files;
     StdFiles std_files;
     DirEntries dir_entries;
+    std::shared_ptr<const ReadOnlyMount> app0_mount;
+    // Guards the mounted descriptor tables; handles are refcounted so a concurrent close cannot
+    // destroy a descriptor that another guest thread is still reading through.
+    mutable std::mutex mounted_mutex;
+    MountedFiles mounted_files;
+    MountedDirectories mounted_directories;
 
     std::unordered_map<std::string, std::string> cachemap;
     bool case_isens_find_enabled = false;

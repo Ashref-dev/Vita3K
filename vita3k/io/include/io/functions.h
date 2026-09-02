@@ -27,6 +27,7 @@
 
 #include <util/fs.h>
 
+#include <optional>
 #include <string>
 
 struct IOState;
@@ -42,6 +43,7 @@ bool find_case_isens_path(IOState &io, VitaIoDevice &device, const fs::path &tra
 fs::path find_in_cache(IOState &io, const std::string &system_path);
 
 fs::path expand_path(IOState &io, const char *path, const fs::path &vita_fs_path);
+std::optional<std::string> get_mounted_app0_path(const IOState &io, const char *path);
 std::string translate_path(const char *path, VitaIoDevice &device, const IOState::DevicePaths &device_paths);
 
 /**

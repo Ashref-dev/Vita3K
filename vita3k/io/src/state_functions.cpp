@@ -28,6 +28,8 @@
 
 #include <io/state.h>
 
+#include <limits>
+
 static const uint32_t page_size = []() -> uint32_t {
 #ifdef _WIN32
     SYSTEM_INFO system_info = {};
@@ -107,4 +109,64 @@ SceOff FileStats::tell() const {
 #else
     return ftello(wrapped_file.get());
 #endif
+}
+
+SceSize MountedFile::next_read_size(const SceSize read_size) const {
+    return cursor >= size ? 0 : static_cast<SceSize>(std::min<uint64_t>({ read_size, size - cursor, std::numeric_limits<int>::max() }));
+}
+
+SceOff MountedFile::read(void *data, const SceSize read_size) {
+    const auto count = next_read_size(read_size);
+    if (count == 0)
+        return 0;
+
+    volatile uint8_t *input_addr = reinterpret_cast<volatile uint8_t *>(data);
+    for (SceSize index = 0; index < count; index += page_size)
+        input_addr[index] = 0;
+    input_addr[count - 1] = 0;
+
+    const auto read = mount->read_at(path, cursor, std::span(static_cast<uint8_t *>(data), count));
+    if (!read || *read > count || *read > std::numeric_limits<uint64_t>::max() - cursor)
+        return -1;
+
+    cursor += *read;
+    return static_cast<SceOff>(*read);
+}
+
+bool MountedFile::seek(const SceOff offset, const SceIoSeekMode seek_mode) {
+    uint64_t base = 0;
+    switch (seek_mode) {
+    case SCE_SEEK_SET:
+        break;
+    case SCE_SEEK_CUR:
+        base = cursor;
+        break;
+    case SCE_SEEK_END:
+        base = size;
+        break;
+    default:
+        return false;
+    }
+
+    uint64_t target = base;
+    if (offset < 0) {
+        const auto magnitude = static_cast<uint64_t>(-(offset + 1)) + 1;
+        if (magnitude > base)
+            return false;
+        target -= magnitude;
+    } else {
+        const auto magnitude = static_cast<uint64_t>(offset);
+        if (magnitude > static_cast<uint64_t>(std::numeric_limits<SceOff>::max()) - base)
+            return false;
+        target += magnitude;
+    }
+
+    cursor = target;
+    return true;
+}
+
+SceOff MountedFile::tell() const {
+    if (cursor > static_cast<uint64_t>(std::numeric_limits<SceOff>::max()))
+        return -1;
+    return static_cast<SceOff>(cursor);
 }

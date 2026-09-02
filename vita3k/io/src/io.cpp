@@ -38,7 +38,8 @@
 
 #include <cassert>
 #include <iostream>
-#include <iterator>
+#include <limits>
+#include <optional>
 #include <string>
 
 #if defined(__aarch64__) && defined(__APPLE__)
@@ -73,6 +74,39 @@ bool read_app_file(FileBuffer &buf, const fs::path &vita_fs_path, const std::str
     return read_file(VitaIoDevice::ux0, buf, vita_fs_path, fs::path("app") / app_path / vfs_file_path);
 }
 
+bool read_app_file(FileBuffer &buf, IOState &io, const fs::path &vita_fs_path, const fs::path &vfs_file_path, const uint64_t maximum_size) {
+    std::string relative_path = vfs_file_path.generic_string();
+    while (relative_path.starts_with('/'))
+        relative_path.erase(relative_path.begin());
+    const std::string guest_path = "app0:/" + relative_path;
+
+    SceIoStat stat{};
+    if (::stat_file(io, guest_path.c_str(), &stat, vita_fs_path, __func__) < 0 || stat.st_size < 0)
+        return false;
+    if (static_cast<uint64_t>(stat.st_size) > maximum_size
+        || static_cast<uint64_t>(stat.st_size) > std::numeric_limits<size_t>::max())
+        return false;
+
+    const auto fd = ::open_file(io, guest_path.c_str(), SCE_O_RDONLY, vita_fs_path, __func__);
+    if (fd < 0)
+        return false;
+
+    buf.resize(static_cast<size_t>(stat.st_size));
+    size_t total = 0;
+    while (total < buf.size()) {
+        const auto chunk = static_cast<SceSize>(std::min<size_t>(buf.size() - total, 1024 * 1024));
+        const int read = ::read_file(buf.data() + total, io, fd, chunk, __func__);
+        if (read <= 0) {
+            ::close_file(io, fd, __func__);
+            buf.clear();
+            return false;
+        }
+        total += static_cast<size_t>(read);
+    }
+
+    return ::close_file(io, fd, __func__) == 0;
+}
+
 SceSize get_directory_used_size(const VitaIoDevice device, const std::string &vfs_path, const fs::path &vita_fs_path) {
     const auto emuenv_path = device::construct_emulated_path(device, vfs_path, vita_fs_path);
 
@@ -96,6 +130,68 @@ static bool is_valid_output_path(const VitaIoDevice device) {
         || device == VitaIoDevice::_INVALID || device == VitaIoDevice::addcont0 || device == VitaIoDevice::tty0
         || device == VitaIoDevice::tty1 || device == VitaIoDevice::tty2 || device == VitaIoDevice::tty3
         || device == VitaIoDevice::music0 || device == VitaIoDevice::photo0 || device == VitaIoDevice::video0);
+}
+
+std::optional<std::string> get_mounted_app0_path(const IOState &io, const char *path) {
+    if (!io.app0_mount)
+        return std::nullopt;
+
+    auto path_device = device::get_device(path);
+    if (path_device != VitaIoDevice::app0)
+        return std::nullopt;
+
+    auto relative_path = device::remove_duplicate_device(path, path_device);
+    string_utils::replace(relative_path, "\\", "/");
+    string_utils::replace(relative_path, "/./", "/");
+    string_utils::replace(relative_path, "//", "/");
+    relative_path = device::remove_device_from_path(relative_path, path_device);
+    while (relative_path.starts_with('/'))
+        relative_path.erase(relative_path.begin());
+    while (relative_path.ends_with('/'))
+        relative_path.pop_back();
+
+    size_t component_start = 0;
+    while (component_start <= relative_path.size()) {
+        const auto component_end = relative_path.find('/', component_start);
+        const auto component = relative_path.substr(component_start, component_end - component_start);
+        if (component == "..")
+            return std::string{ ".." };
+        if (component_end == std::string::npos)
+            break;
+        component_start = component_end + 1;
+    }
+    return relative_path;
+}
+
+static int mount_error(const ReadOnlyMountError error, const char *export_name) {
+    if (error == ReadOnlyMountError::not_found)
+        return IO_ERROR(SCE_ERROR_ERRNO_ENOENT);
+    return IO_ERROR_UNK();
+}
+
+static std::shared_ptr<MountedFile> find_mounted_file(const IOState &io, const SceUID fd) {
+    const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+    const auto found = io.mounted_files.find(fd);
+    return found == io.mounted_files.end() ? nullptr : found->second;
+}
+
+static std::shared_ptr<MountedDirectory> find_mounted_directory(const IOState &io, const SceUID fd) {
+    const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+    const auto found = io.mounted_directories.find(fd);
+    return found == io.mounted_directories.end() ? nullptr : found->second;
+}
+
+static void fill_mounted_stat(SceIoStat &output, const ReadOnlyMountStat &mounted_stat) {
+    memset(&output, 0, sizeof(output));
+    output.st_mode = SCE_S_IRUSR | SCE_S_IRGRP | SCE_S_IROTH;
+    output.st_size = static_cast<SceOff>(mounted_stat.size);
+    if (mounted_stat.type == ReadOnlyMountEntryType::file) {
+        output.st_attr = SCE_SO_IFREG;
+        output.st_mode |= SCE_S_IFREG;
+    } else {
+        output.st_attr = SCE_SO_IFDIR;
+        output.st_mode |= SCE_S_IFDIR | SCE_S_IXUSR | SCE_S_IXGRP | SCE_S_IXOTH;
+    }
 }
 
 bool init(IOState &io, const fs::path &cache_path, const fs::path &log_path, const fs::path &vita_fs_path, bool redirect_stdio) {
@@ -136,7 +232,13 @@ bool init(IOState &io, const fs::path &cache_path, const fs::path &log_path, con
 void io_deinit(IOState &io) {
     io.std_files.clear();
     io.dir_entries.clear();
+    {
+        const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+        io.mounted_files.clear();
+        io.mounted_directories.clear();
+    }
     io.tty_files.clear();
+    io.app0_mount.reset();
 
     io.next_fd = 0;
 
@@ -333,6 +435,27 @@ SceUID open_file(IOState &io, const char *path, const int flags, const fs::path 
         return fd;
     }
 
+    if (const auto mounted_path = get_mounted_app0_path(io, path)) {
+        if (flags & (SCE_O_WRONLY | SCE_O_APPEND | SCE_O_CREAT | SCE_O_TRUNC))
+            return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+        const auto mounted_stat = io.app0_mount->stat(*mounted_path);
+        if (!mounted_stat)
+            return mount_error(mounted_stat.error(), export_name);
+        if (mounted_stat->type != ReadOnlyMountEntryType::file)
+            return IO_ERROR(SCE_ERROR_ERRNO_ENOENT);
+        if (mounted_stat->size > static_cast<uint64_t>(std::numeric_limits<SceOff>::max()))
+            return IO_ERROR_UNK();
+
+        const auto fd = io.next_fd++;
+        auto mounted_file = std::make_shared<MountedFile>();
+        mounted_file->mount = io.app0_mount;
+        mounted_file->path = *mounted_path;
+        mounted_file->size = mounted_stat->size;
+        const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+        io.mounted_files.emplace(fd, std::move(mounted_file));
+        return fd;
+    }
+
     const auto translated_path = translate_path(path, device, io.device_paths);
     if (translated_path.empty()) {
         LOG_ERROR("Cannot translate path: {}", path);
@@ -391,6 +514,12 @@ int read_file(void *data, IOState &io, const SceUID fd, const SceSize size, cons
     assert(data != nullptr);
     assert(size >= 0);
 
+    if (const auto mounted_file = find_mounted_file(io, fd)) {
+        const std::lock_guard<std::mutex> file_lock(mounted_file->mutex);
+        const auto read = mounted_file->read(data, size);
+        return read < 0 ? IO_ERROR_UNK() : static_cast<int>(read);
+    }
+
     const auto file = io.std_files.find(fd);
     if (file != io.std_files.end()) {
         const auto read = file->second.read(data, 1, size);
@@ -419,6 +548,9 @@ int write_file(SceUID fd, const void *data, const SceSize size, const IOState &i
         LOG_WARN("Error writing fd: {}, size: {}", log_hex(fd), size);
         return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
     }
+
+    if (find_mounted_file(io, fd))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
 
     const auto tty_file = io.tty_files.find(fd);
     if (tty_file != io.tty_files.end()) {
@@ -460,6 +592,9 @@ int truncate_file(const SceUID fd, unsigned long long length, const IOState &io,
     if (fd < 0)
         return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
 
+    if (find_mounted_file(io, fd))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+
     const auto file = io.std_files.find(fd);
     if (file == io.std_files.end())
         return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
@@ -474,6 +609,13 @@ SceOff seek_file(const SceUID fd, const SceOff offset, const SceIoSeekMode whenc
 
     if (fd < 0)
         return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
+
+    if (const auto mounted_file = find_mounted_file(io, fd)) {
+        const std::lock_guard<std::mutex> file_lock(mounted_file->mutex);
+        if (!mounted_file->seek(offset, whence))
+            return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
+        return mounted_file->tell();
+    }
 
     const auto file = io.std_files.find(fd);
     if (file == io.std_files.end())
@@ -499,6 +641,11 @@ SceOff tell_file(IOState &io, const SceUID fd, const char *export_name) {
     if (fd < 0)
         return IO_ERROR(SCE_ERROR_ERRNO_EMFILE);
 
+    if (const auto mounted_file = find_mounted_file(io, fd)) {
+        const std::lock_guard<std::mutex> file_lock(mounted_file->mutex);
+        return mounted_file->tell();
+    }
+
     const auto std_file = io.std_files.find(fd);
 
     if (std_file == io.std_files.end()) {
@@ -515,6 +662,16 @@ int stat_file(IOState &io, const char *file, SceIoStat *statp, const fs::path &v
 
     fs::path file_path = "";
     if (fd == invalid_fd) {
+        if (const auto mounted_path = get_mounted_app0_path(io, file)) {
+            const auto mounted_stat = io.app0_mount->stat(*mounted_path);
+            if (!mounted_stat)
+                return mount_error(mounted_stat.error(), export_name);
+            if (mounted_stat->size > static_cast<uint64_t>(std::numeric_limits<SceOff>::max()))
+                return IO_ERROR_UNK();
+            fill_mounted_stat(*statp, *mounted_stat);
+            return 0;
+        }
+
         auto device = device::get_device(file);
         auto device_for_icase = device;
         if (device == VitaIoDevice::_INVALID) {
@@ -550,6 +707,11 @@ int stat_file(IOState &io, const char *file, SceIoStat *statp, const fs::path &v
         }
         LOG_TRACE_IF(log_file_op && log_file_stat, "{}: Statting file: {} ({})", export_name, file, device::construct_normalized_path(device, translated_path));
     } else { // We have previously opened and defined the location
+        if (const auto mounted_file = find_mounted_file(io, fd)) {
+            fill_mounted_stat(*statp, { ReadOnlyMountEntryType::file, mounted_file->size });
+            return 0;
+        }
+
         const auto fd_file = io.std_files.find(fd);
         if (fd_file == io.std_files.end())
             return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
@@ -608,6 +770,11 @@ int stat_file_by_fd(IOState &io, const SceUID fd, SceIoStat *statp, const fs::pa
     assert(statp != nullptr);
     memset(statp, '\0', sizeof(SceIoStat));
 
+    if (const auto mounted_file = find_mounted_file(io, fd)) {
+        fill_mounted_stat(*statp, { ReadOnlyMountEntryType::file, mounted_file->size });
+        return 0;
+    }
+
     const auto std_file = io.std_files.find(fd);
     if (std_file == io.std_files.end()) {
         return IO_ERROR(SCE_ERROR_ERRNO_EBADFD);
@@ -624,11 +791,18 @@ int close_file(IOState &io, const SceUID fd, const char *export_name) {
 
     io.tty_files.erase(fd);
     io.std_files.erase(fd);
+    {
+        const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+        io.mounted_files.erase(fd);
+    }
 
     return 0;
 }
 
 int remove_file(IOState &io, const char *file, const fs::path &vita_fs_path, const char *export_name) {
+    if (get_mounted_app0_path(io, file))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+
     auto device = device::get_device(file);
     if (device == VitaIoDevice::_INVALID) {
         LOG_ERROR("Cannot find device for path: {}", file);
@@ -661,6 +835,9 @@ int remove_file(IOState &io, const char *file, const fs::path &vita_fs_path, con
 }
 
 int rename(IOState &io, const char *old_name, const char *new_name, const fs::path &vita_fs_path, const char *export_name) {
+    if (get_mounted_app0_path(io, old_name) || get_mounted_app0_path(io, new_name))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+
     auto device = device::get_device(old_name);
     if (device == VitaIoDevice::_INVALID) {
         LOG_ERROR("Cannot find device for path: {}", old_name);
@@ -702,6 +879,22 @@ int rename(IOState &io, const char *old_name, const char *new_name, const fs::pa
 }
 
 SceUID open_dir(IOState &io, const char *path, const fs::path &vita_fs_path, const char *export_name) {
+    if (const auto mounted_path = get_mounted_app0_path(io, path)) {
+        const auto mounted_stat = io.app0_mount->stat(*mounted_path);
+        if (!mounted_stat)
+            return mount_error(mounted_stat.error(), export_name);
+        if (mounted_stat->type != ReadOnlyMountEntryType::directory)
+            return IO_ERROR(SCE_ERROR_ERRNO_ENOENT);
+
+        const auto fd = io.next_fd++;
+        auto mounted_directory = std::make_shared<MountedDirectory>();
+        mounted_directory->mount = io.app0_mount;
+        mounted_directory->path = *mounted_path;
+        const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+        io.mounted_directories.emplace(fd, std::move(mounted_directory));
+        return fd;
+    }
+
     auto device = device::get_device(path);
     auto device_for_icase = device;
     const auto translated_path = translate_path(path, device, io.device_paths);
@@ -752,6 +945,22 @@ SceUID read_dir(IOState &io, const SceUID fd, SceIoDirent *dent, const fs::path 
 
     memset(dent->d_name, '\0', sizeof(dent->d_name));
 
+    if (const auto mounted_directory = find_mounted_directory(io, fd)) {
+        const std::lock_guard<std::mutex> directory_lock(mounted_directory->mutex);
+        const auto entry = mounted_directory->mount->read_directory(mounted_directory->path, mounted_directory->cursor);
+        if (!entry)
+            return mount_error(entry.error(), export_name);
+        if (!*entry)
+            return 0;
+
+        ++mounted_directory->cursor;
+        const auto name_size = std::min((*entry)->name.size(), sizeof(dent->d_name) - 1);
+        memcpy(dent->d_name, (*entry)->name.data(), name_size);
+        dent->d_name[name_size] = '\0';
+        fill_mounted_stat(dent->d_stat, (*entry)->stat);
+        return 1;
+    }
+
     const auto dir = io.dir_entries.find(fd);
 
     if (dir != io.dir_entries.end()) {
@@ -797,6 +1006,9 @@ bool copy_path(const fs::path &src_path, const fs::path &vita_fs_path, const std
 }
 
 int create_dir(IOState &io, const char *dir, int mode, const fs::path &vita_fs_path, const char *export_name, const bool recursive) {
+    if (get_mounted_app0_path(io, dir))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+
     auto device = device::get_device(dir);
     const auto translated_path = translate_path(dir, device, io.device_paths);
     if (translated_path.empty()) {
@@ -828,7 +1040,11 @@ int close_dir(IOState &io, const SceUID fd, const char *export_name) {
     if (fd < 0)
         return IO_ERROR(SCE_ERROR_ERRNO_EMFILE);
 
-    const auto erased_entries = io.dir_entries.erase(fd);
+    size_t erased_entries = io.dir_entries.erase(fd);
+    {
+        const std::lock_guard<std::mutex> mounted_lock(io.mounted_mutex);
+        erased_entries += io.mounted_directories.erase(fd);
+    }
 
     LOG_TRACE_IF(log_file_op, "{}: Closing dir fd: {}", export_name, log_hex(fd));
 
@@ -839,6 +1055,9 @@ int close_dir(IOState &io, const SceUID fd, const char *export_name) {
 }
 
 int remove_dir(IOState &io, const char *dir, const fs::path &vita_fs_path, const char *export_name) {
+    if (get_mounted_app0_path(io, dir))
+        return IO_ERROR(SCE_ERROR_ERRNO_EOPNOTSUPP);
+
     auto device = device::get_device(dir);
     if (device == VitaIoDevice::_INVALID) {
         LOG_ERROR("Cannot find device for path: {}", dir);

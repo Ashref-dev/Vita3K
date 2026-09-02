@@ -21,6 +21,7 @@
 #include <util/types.h>
 
 enum class VitaIoDevice : int;
+struct IOState;
 
 namespace vfs {
 
@@ -28,5 +29,6 @@ using FileBuffer = std::vector<SceUInt8>;
 
 bool read_file(VitaIoDevice device, FileBuffer &buf, const fs::path &vita_fs_path, const fs::path &vfs_file_path);
 bool read_app_file(FileBuffer &buf, const fs::path &vita_fs_path, const std::string &app_path, const fs::path &vfs_file_path);
+bool read_app_file(FileBuffer &buf, IOState &io, const fs::path &vita_fs_path, const fs::path &vfs_file_path, uint64_t maximum_size);
 SceSize get_directory_used_size(const VitaIoDevice device, const std::string &vfs_path, const fs::path &vita_fs_path);
 } // namespace vfs
