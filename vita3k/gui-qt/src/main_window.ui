@@ -24,6 +24,8 @@
     <property name="title">
      <string>File</string>
     </property>
+    <addaction name="boot_game_action"/>
+    <addaction name="separator"/>
     <addaction name="install_firmware_action"/>
     <addaction name="install_pkg_action"/>
     <addaction name="install_zip_action"/>
@@ -204,6 +206,14 @@
   <action name="install_firmware_action">
    <property name="text">
     <string>Install Firmware (.PUP)</string>
+   </property>
+  </action>
+  <action name="boot_game_action">
+   <property name="text">
+    <string>Boot Game...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+O</string>
    </property>
   </action>
   <action name="install_pkg_action">

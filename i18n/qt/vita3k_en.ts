@@ -1337,6 +1337,11 @@ The key may be invalid.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.ui" line="213"/>
+        <source>Boot Game...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../vita3k/gui-qt/src/main_window.ui" line="204"/>
         <source>Install Package (.pkg)</source>
         <translation type="unfinished"></translation>
@@ -1552,6 +1557,30 @@ The file may be corrupted.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="603"/>
+        <source>Select Game Archive</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="605"/>
+        <source>NoNpDrm game archive (*.zip)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="614"/>
+        <source>Could Not Boot Game</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="615"/>
+        <source>Vita3K could not open the selected game archive.
+
+%1
+
+Choose a valid NoNpDrm game ZIP and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="584"/>
         <source>An app is already running.
 Do you want to close it and launch another app?
@@ -1673,6 +1702,11 @@ Games may fail to boot or render correctly until they are installed.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="978"/>
+        <source>Could not initialize direct-play app &apos;%1&apos;.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="1015"/>
         <source>Exit Game?</source>
         <translation type="unfinished"></translation>
@@ -1755,6 +1789,14 @@ Any unsaved progress will be lost!</source>
     <message>
         <location filename="../../vita3k/gui-qt/src/main_window.cpp" line="1759"/>
         <source>VOLUME: %1%</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>main</name>
+    <message>
+        <location filename="../../vita3k/main.cpp" line="227"/>
+        <source>Direct Play Error</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

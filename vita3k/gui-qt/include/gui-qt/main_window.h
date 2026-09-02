@@ -102,6 +102,7 @@ private slots:
     void on_live_area_play();
     void on_live_area_closed();
 
+    void on_boot_game_triggered();
     void on_install_firmware_triggered();
     void on_install_pkg_triggered();
     void on_install_zip_triggered();
