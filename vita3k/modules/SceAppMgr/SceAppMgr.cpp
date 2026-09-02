@@ -17,6 +17,7 @@
 
 #include "SceAppMgr.h"
 
+#include <io/functions.h>
 #include <io/state.h>
 #include <kernel/state.h>
 #include <packages/sfo.h>
@@ -418,9 +419,9 @@ EXPORT(SceInt32, _sceAppMgrLoadExec, const char *appPath, Ptr<char> const argv[]
 
     LOG_INFO("sceAppMgrLoadExec run self: {}", appPath);
 
-    // Load exec executable
-    vfs::FileBuffer exec_buffer;
-    if (vfs::read_app_file(exec_buffer, emuenv.vita_fs_path, emuenv.io.app_path, exec_path)) {
+    SceIoStat exec_stat{};
+    if (stat_file(emuenv.io, appPath, &exec_stat, emuenv.vita_fs_path, __FUNCTION__) >= 0
+        && (exec_stat.st_mode & SCE_S_IFREG) != 0) {
         std::vector<std::string> exec_argv;
         if (argv && argv->get(emuenv.mem)) {
             size_t args = 0;
@@ -435,7 +436,7 @@ EXPORT(SceInt32, _sceAppMgrLoadExec, const char *appPath, Ptr<char> const argv[]
                 return RET_ERROR(SCE_APPMGR_ERROR_TOO_LONG_ARGV);
         }
 
-        emuenv.kernel.request_process_exit(0, AppLaunchRequest{ .app_path = emuenv.io.app_path, .self_path = std::move(exec_path), .argv = std::move(exec_argv), .reason = AppLaunchReason::LoadExec });
+        emuenv.kernel.request_process_exit(0, AppLaunchRequest{ .app_path = emuenv.io.app_path, .self_path = std::move(exec_path), .argv = std::move(exec_argv), .reason = AppLaunchReason::LoadExec, .direct_app = emuenv.direct_app });
 
         return SCE_KERNEL_OK;
     }
