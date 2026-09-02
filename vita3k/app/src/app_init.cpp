@@ -46,6 +46,7 @@
 #include <overlay/display_manager.h>
 #include <overlay/input.h>
 #include <overlay/trophy_notification.h>
+#include <packages/license.h>
 #include <packages/sfo.h>
 #include <regmgr/state.h>
 #include <renderer/functions.h>
@@ -529,6 +530,7 @@ void shutdown_app_runtime(EmuEnvState &state) {
 }
 
 void reset_app_state(EmuEnvState &state) {
+    release_direct_app(state);
     app::reset_perf_metrics(state);
 
     state.app_path.clear();
