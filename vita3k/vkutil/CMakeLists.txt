@@ -4,9 +4,11 @@ add_library(
 	include/vkutil/native_surface.h
 	include/vkutil/objects.h
 	include/vkutil/upload_buffer_allocator.h
+	include/vkutil/vertex_buffer_pool.h
 	include/vkutil/vkutil.h
 
 	src/objects.cpp
+	src/vertex_buffer_pool.cpp
 	src/vkutil.cpp
 )
 
