@@ -17,41 +17,40 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <expected>
+#include <optional>
+#include <span>
 #include <string>
-#include <vector>
+#include <string_view>
 
-class ReadOnlyMount;
-
-inline constexpr size_t DIRECT_APP_LICENSE_SIZE = 0x200;
-
-struct DirectAppLaunch {
-    std::shared_ptr<const ReadOnlyMount> mount;
-    std::string app_version;
-    std::string app_category;
-    std::string content_id;
-    std::string addcont;
-    std::string savedata;
-    std::string parental_level;
-    std::string short_title;
-    std::string title;
-    std::string title_id;
-    std::array<uint8_t, DIRECT_APP_LICENSE_SIZE> license{};
+enum class ReadOnlyMountError {
+    not_found,
+    io_error,
+    out_of_range,
 };
 
-enum class AppLaunchReason {
-    User,
-    LoadExec,
-    ProcessExit,
+enum class ReadOnlyMountEntryType {
+    file,
+    directory,
 };
 
-struct AppLaunchRequest {
-    std::string app_path{};
-    std::string self_path{};
-    std::vector<std::string> argv{};
-    AppLaunchReason reason = AppLaunchReason::User;
-    std::shared_ptr<const DirectAppLaunch> direct_app;
+struct ReadOnlyMountStat {
+    ReadOnlyMountEntryType type;
+    uint64_t size;
+};
+
+struct ReadOnlyMountDirEntry {
+    std::string name;
+    ReadOnlyMountStat stat;
+};
+
+class ReadOnlyMount {
+public:
+    virtual ~ReadOnlyMount() = default;
+
+    virtual std::expected<ReadOnlyMountStat, ReadOnlyMountError> stat(std::string_view path) const = 0;
+    virtual std::expected<size_t, ReadOnlyMountError> read_at(std::string_view path, uint64_t offset, std::span<uint8_t> output) const = 0;
+    virtual std::expected<std::optional<ReadOnlyMountDirEntry>, ReadOnlyMountError> read_directory(std::string_view path, size_t index) const = 0;
 };

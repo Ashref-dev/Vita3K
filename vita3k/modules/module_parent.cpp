@@ -264,7 +264,7 @@ SceUID load_module(EmuEnvState &emuenv, const std::string &module_path) {
         }
     }
 
-    if (emuenv.io.case_isens_find_enabled && !fs::exists(system_path)) {
+    if ((device_for_icase != VitaIoDevice::app0 || !emuenv.io.app0_mount) && emuenv.io.case_isens_find_enabled && !fs::exists(system_path)) {
         // Attempt a case-insensitive file search.
         const auto original_translated_module_path = translated_module_path;
         const auto cached_path = find_in_cache(emuenv.io, string_utils::tolower(translated_module_path.string()));
@@ -287,9 +287,10 @@ SceUID load_module(EmuEnvState &emuenv, const std::string &module_path) {
 
     vfs::FileBuffer module_buffer;
     bool res;
-    if (device == VitaIoDevice::app0)
-        res = vfs::read_app_file(module_buffer, emuenv.vita_fs_path, emuenv.io.app_path, translated_module_path);
-    else
+    if (device_for_icase == VitaIoDevice::app0) {
+        const auto app_module_path = device::remove_device_from_path(module_path, device_for_icase);
+        res = vfs::read_app_file(module_buffer, emuenv.io, emuenv.vita_fs_path, app_module_path, 512ull * 1024 * 1024);
+    } else
         res = vfs::read_file(device, module_buffer, emuenv.vita_fs_path, translated_module_path);
     if (!res) {
         LOG_ERROR("Failed to read module file {}", module_path);

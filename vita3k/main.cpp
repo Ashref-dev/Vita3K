@@ -33,6 +33,7 @@
 #include <modules/module_parent.h>
 #include <packages/functions.h>
 #include <packages/license.h>
+#include <packages/nonpdrm_zip_direct.h>
 #include <packages/pkg.h>
 #include <packages/sfo.h>
 #include <shader/spirv_recompiler.h>
@@ -64,6 +65,8 @@
 #include <SDL3/SDL_main.h>
 
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <optional>
 
 int main(int argc, char *argv[]) {
@@ -212,6 +215,38 @@ int main(int argc, char *argv[]) {
     }
 
     app::load_users(emuenv);
+
+    if (cfg.direct_play_path.has_value()) {
+        LOG_INFO("Opening NoNpDrm ZIP for direct play: {}", cfg.direct_play_path->string());
+        const std::filesystem::path archive_path(cfg.direct_play_path->string());
+        packages::NoNpDrmZipOptions direct_play_options;
+        direct_play_options.sys_language = cfg.current_config.sys_lang;
+        auto opened = packages::open_nonpdrm_zip_direct(archive_path, direct_play_options);
+        if (!opened) {
+            LOG_ERROR("Could not open direct-play ZIP: {}", opened.error().message);
+            QMessageBox::critical(nullptr, QCoreApplication::translate("main", "Direct Play Error"), QString::fromStdString(opened.error().message));
+            return InvalidApplicationPath;
+        }
+
+        static_assert(sizeof(SceNpDrmLicense) == DIRECT_APP_LICENSE_SIZE);
+        auto direct_app = std::make_shared<DirectAppLaunch>();
+        direct_app->mount = std::move(opened->mount);
+        direct_app->app_version = std::move(opened->app_info.app_version);
+        direct_app->app_category = std::move(opened->app_info.app_category);
+        direct_app->content_id = std::move(opened->app_info.app_content_id);
+        direct_app->addcont = std::move(opened->app_info.app_addcont);
+        direct_app->savedata = std::move(opened->app_info.app_savedata);
+        direct_app->parental_level = std::move(opened->app_info.app_parental_level);
+        direct_app->short_title = std::move(opened->app_info.app_short_title);
+        direct_app->title = std::move(opened->app_info.app_title);
+        direct_app->title_id = std::move(opened->app_info.app_title_id);
+        std::memcpy(direct_app->license.data(), &opened->license, direct_app->license.size());
+        emuenv.post_app_launch_request(AppLaunchRequest{
+            .app_path = direct_app->title_id,
+            .direct_app = std::move(direct_app),
+        });
+        cfg.direct_play_path.reset();
+    }
 
     if (cfg.content_path.has_value()) {
         const auto extension = string_utils::tolower(cfg.content_path->extension().string());

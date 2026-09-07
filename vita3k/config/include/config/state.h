@@ -27,6 +27,7 @@
 struct Config {
     // Optional config settings
     std::optional<fs::path> content_path;
+    std::optional<fs::path> direct_play_path;
     std::optional<std::string> run_app_path;
     std::optional<std::string> recompile_shader_path;
     std::optional<std::string> delete_title_id;

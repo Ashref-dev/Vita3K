@@ -146,6 +146,8 @@ static void update_members(Config &self, const Config &rhs) {
 static void check_members(Config &self, const Config &rhs) {
     if (rhs.content_path.has_value())
         self.content_path = rhs.content_path;
+    if (rhs.direct_play_path.has_value())
+        self.direct_play_path = rhs.direct_play_path;
     if (rhs.run_app_path.has_value())
         self.run_app_path = rhs.run_app_path;
     if (rhs.recompile_shader_path.has_value())
@@ -353,6 +355,8 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths,
         ->default_str("eboot.bin")->group("Input");
     input->add_option("--installed-path,-r", command_line.run_app_path, "Path to the installed app to run")
         ->default_str({})->check(CLI::IsMember(get_file_set(cfg.get_vita_fs_path() / "ux0/app")))->group("Input");
+    input->add_option("--direct-play", command_line.direct_play_path, "Play a NoNpDrm game directly from a ZIP without installing it")
+        ->default_str({})->check(CLI::ExistingFile)->group("Input");
     input->add_option("--recompile-shader,-s", command_line.recompile_shader_path, "Recompile the given PS Vita shader (GXP format) to SPIR_V / GLSL and quit")
         ->default_str({})->group("Input");
     input->add_option("--deleted-id,-d", command_line.delete_title_id, "Title ID of installed app to delete")
@@ -464,6 +468,7 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths,
         static constexpr std::array LIST_LOG_LEVEL = SPDLOG_LEVEL_NAMES;
 
         LOG_INFO_IF(cfg.content_path, "input-content-path: {}", cfg.content_path->string());
+        LOG_INFO_IF(cfg.direct_play_path, "input-direct-play-path: {}", cfg.direct_play_path->string());
         LOG_INFO_IF(cfg.run_app_path, "input-installed-path: {}", *cfg.run_app_path);
         LOG_INFO("log-level: {}", LIST_LOG_LEVEL[cfg.log_level]);
         LOG_INFO_IF(cfg.log_active_shaders, "log-active-shaders: enabled");

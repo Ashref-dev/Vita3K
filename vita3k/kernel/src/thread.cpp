@@ -435,6 +435,17 @@ void ThreadState::suspend() {
     stop(*cpu);
 }
 
+bool ThreadState::suspend_if_running() {
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (status != ThreadStatus::run)
+            return false;
+        suspend_requested = true;
+    }
+    stop(*cpu);
+    return true;
+}
+
 void ThreadState::resume(bool step) {
     assert(status == ThreadStatus::suspend || status == ThreadStatus::dormant);
     {

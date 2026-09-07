@@ -5,6 +5,7 @@ add_library(
 	include/io/filesystem.h
 	include/io/functions.h
 	include/io/io.h
+	include/io/read_only_mount.h
 	include/io/state.h
 	include/io/types.h
 	include/io/util.h
@@ -18,3 +19,14 @@ add_library(
 
 target_include_directories(io PUBLIC include)
 target_link_libraries(io PUBLIC dirent rtc util)
+
+if(NOT ANDROID)
+	add_executable(
+		io-tests
+		tests/read_only_mount_tests.cpp
+	)
+
+	target_include_directories(io-tests PRIVATE include tests)
+	target_link_libraries(io-tests PRIVATE io googletest util)
+	add_test(NAME io COMMAND io-tests)
+endif()

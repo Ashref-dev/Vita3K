@@ -242,7 +242,29 @@ EXPORT(int32_t, sceAvPlayerAddSource, SceUID player_handle, Ptr<const char> path
 
     const auto thread = emuenv.kernel.get_thread(thread_id);
 
-    auto file_path = expand_path(emuenv.io, path.get(emuenv.mem), emuenv.vita_fs_path);
+    const char *vita_path = path.get(emuenv.mem);
+    if (const auto mounted_path = get_mounted_app0_path(emuenv.io, vita_path)) {
+        const auto mounted_stat = emuenv.io.app0_mount->stat(*mounted_path);
+        if (!mounted_stat || mounted_stat->type != ReadOnlyMountEntryType::file)
+            return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
+
+        const auto mount = emuenv.io.app0_mount;
+        player_info->player.queue(PlayerSource{
+            .name = vita_path,
+            .size = mounted_stat->size,
+            .read_at = [mount, mounted_path = *mounted_path](uint64_t offset, std::span<uint8_t> output) -> std::optional<size_t> {
+                const auto read = mount->read_at(mounted_path, offset, output);
+                if (!read)
+                    return std::nullopt;
+                return *read;
+            },
+        });
+        run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_BUFFERING, 0, Ptr<void>(0));
+        run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_READY, 0, Ptr<void>(0));
+        return 0;
+    }
+
+    auto file_path = expand_path(emuenv.io, vita_path, emuenv.vita_fs_path);
     if (!fs::exists(file_path) && player_info->file_manager.open_file && player_info->file_manager.close_file && player_info->file_manager.read_file && player_info->file_manager.file_size) {
         fs::create_directories(emuenv.cache_path);
 

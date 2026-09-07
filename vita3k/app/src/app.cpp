@@ -36,6 +36,7 @@
 #include <SDL3/SDL_gamepad.h>
 
 #include <algorithm>
+#include <cstring>
 
 namespace app {
 
@@ -262,6 +263,50 @@ bool setup_game_launch(EmuEnvState &emuenv, const std::string &app_path, const b
     return true;
 }
 
+bool setup_game_launch(EmuEnvState &emuenv, const AppLaunchRequest &launch_request, const bool update_last_time_used) {
+    if (!launch_request.direct_app)
+        return setup_game_launch(emuenv, launch_request.app_path, update_last_time_used);
+
+    const auto &direct_app = *launch_request.direct_app;
+    if (!direct_app.mount || direct_app.title_id.empty() || launch_request.app_path != direct_app.title_id)
+        return false;
+    if (!ensure_current_user(emuenv))
+        return false;
+
+    emuenv.io.app_path = direct_app.title_id;
+    emuenv.io.title_id = direct_app.title_id;
+    emuenv.io.addcont = direct_app.addcont;
+    emuenv.io.content_id = direct_app.content_id;
+    emuenv.io.savedata = direct_app.savedata.empty() ? direct_app.title_id : direct_app.savedata;
+    emuenv.current_app_title = direct_app.title;
+    emuenv.app_info = {
+        .app_version = direct_app.app_version,
+        .app_category = direct_app.app_category,
+        .app_content_id = direct_app.content_id,
+        .app_addcont = direct_app.addcont,
+        .app_savedata = direct_app.savedata,
+        .app_parental_level = direct_app.parental_level,
+        .app_short_title = direct_app.short_title,
+        .app_title = direct_app.title,
+        .app_title_id = direct_app.title_id,
+    };
+    emuenv.io.app0_mount = direct_app.mount;
+    emuenv.direct_app = launch_request.direct_app;
+
+    emuenv.previous_direct_license.reset();
+    if (const auto existing = emuenv.license.rif.find(direct_app.title_id); existing != emuenv.license.rif.end()) {
+        std::array<uint8_t, 512> previous{};
+        std::memcpy(previous.data(), &existing->second, previous.size());
+        emuenv.previous_direct_license = previous;
+    }
+    auto &license = emuenv.license.rif[direct_app.title_id];
+    std::memcpy(&license, direct_app.license.data(), direct_app.license.size());
+
+    set_current_config(emuenv, direct_app.title_id);
+    reset_perf_metrics(emuenv);
+    return true;
+}
+
 void prepare_game_launch_overlay(EmuEnvState &emuenv) {
     if (!emuenv.renderer)
         return;
@@ -342,7 +387,24 @@ bool update_runtime_metrics(EmuEnvState &emuenv, LaunchRuntimeMetrics &metrics) 
     return true;
 }
 
+void release_direct_app(EmuEnvState &emuenv) {
+    if (emuenv.direct_app) {
+        if (emuenv.previous_direct_license) {
+            auto &license = emuenv.license.rif[emuenv.direct_app->title_id];
+            std::memcpy(&license, emuenv.previous_direct_license->data(), emuenv.previous_direct_license->size());
+        } else {
+            emuenv.license.rif.erase(emuenv.direct_app->title_id);
+        }
+    }
+    emuenv.previous_direct_license.reset();
+    emuenv.direct_app.reset();
+    emuenv.io.app0_mount.reset();
+}
+
 void abort_game_launch(EmuEnvState &emuenv) {
+    release_direct_app(emuenv);
+    emuenv.io.mounted_files.clear();
+    emuenv.io.mounted_directories.clear();
     emuenv.io.app_path.clear();
     emuenv.io.title_id.clear();
     emuenv.io.addcont.clear();
@@ -364,6 +426,8 @@ void abort_game_launch(EmuEnvState &emuenv) {
 void request_in_process_launch(EmuEnvState &emuenv, AppLaunchRequest request) {
     if (request.app_path.empty())
         request.app_path = emuenv.io.app_path;
+    if (!request.direct_app && request.app_path == emuenv.io.app_path)
+        request.direct_app = emuenv.direct_app;
 
     emuenv.post_app_launch_request(std::move(request));
     if (emuenv.renderer)

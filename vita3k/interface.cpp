@@ -475,7 +475,7 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
 
     // Load param.sfo
     vfs::FileBuffer param_sfo;
-    if (vfs::read_app_file(param_sfo, emuenv.vita_fs_path, emuenv.io.app_path, "sce_sys/param.sfo"))
+    if (vfs::read_app_file(param_sfo, emuenv.io, emuenv.vita_fs_path, "sce_sys/param.sfo", 8 * 1024 * 1024))
         sfo::load(emuenv.sfo_handle, param_sfo);
 
     init_exported_vars(emuenv);
@@ -509,16 +509,16 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
             process_preload_disabled = *preload_disabled_ptr.get(emuenv.mem);
         }
     }
-    const auto module_app_path{ emuenv.vita_fs_path / "ux0/app" / emuenv.io.app_path / "sce_module" };
-
     std::vector<std::string> lib_load_list = {};
     // todo: check if module is imported
     auto add_preload_module = [&](uint32_t code, SceSysmoduleModuleId module_id, const std::string &name, bool load_from_app) {
         if ((process_preload_disabled & code) == 0) {
             if (is_lle_module(name, emuenv)) {
                 const auto module_name_file = fmt::format("{}.suprx", name);
-                if (load_from_app && fs::exists(module_app_path / module_name_file))
-                    lib_load_list.emplace_back(fmt::format("app0:sce_module/{}", module_name_file));
+                const auto app_module_path = fmt::format("app0:sce_module/{}", module_name_file);
+                SceIoStat app_module_stat{};
+                if (load_from_app && stat_file(emuenv.io, app_module_path.c_str(), &app_module_stat, emuenv.vita_fs_path, __func__) == 0)
+                    lib_load_list.emplace_back(app_module_path);
                 else if (fs::exists(emuenv.vita_fs_path / "vs0/sys/external" / module_name_file))
                     lib_load_list.emplace_back(fmt::format("vs0:sys/external/{}", module_name_file));
             }

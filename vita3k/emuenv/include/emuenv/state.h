@@ -20,13 +20,13 @@
 #include <emuenv/window.h>
 #include <util/fs.h>
 
+#include <array>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
-#include <vector>
 
 // forward declare everything used in EmuEnvState
 namespace sfo {
@@ -134,6 +134,8 @@ public:
     fs::path patch_path{}; // Path for patch files
     std::string self_name{};
     std::string self_path{};
+    std::shared_ptr<const DirectAppLaunch> direct_app;
+    std::optional<std::array<uint8_t, 512>> previous_direct_license;
     Config &cfg;
     SceUID main_thread_id{};
     size_t frame_count = 0;

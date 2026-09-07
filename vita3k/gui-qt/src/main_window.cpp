@@ -64,6 +64,7 @@
 #include <np/state.h>
 #include <packages/functions.h>
 #include <packages/license.h>
+#include <packages/nonpdrm_zip_direct.h>
 #include <renderer/functions.h>
 #include <renderer/shaders.h>
 #include <renderer/state.h>
@@ -85,6 +86,7 @@
 #include <QCloseEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -104,6 +106,7 @@
 #include <QWidgetAction>
 #include <QtResource>
 
+#include <cstring>
 #include <optional>
 
 #if defined(HAVE_X11) || defined(HAVE_WAYLAND)
@@ -451,6 +454,8 @@ void MainWindow::initialize() {
 
     connect(m_ui->install_firmware_action, &QAction::triggered,
         this, &MainWindow::on_install_firmware_triggered);
+    connect(m_ui->boot_game_action, &QAction::triggered,
+        this, &MainWindow::on_boot_game_triggered);
     connect(m_ui->install_pkg_action, &QAction::triggered,
         this, &MainWindow::on_install_pkg_triggered);
     connect(m_ui->install_zip_action, &QAction::triggered,
@@ -579,13 +584,58 @@ void MainWindow::initialize() {
 
     init_discord();
 
-    if (emuenv.cfg.run_app_path.has_value()) {
+    if (auto startup_request = take_pending_app_launch_request()) {
+        QTimer::singleShot(0, this, [this, request = std::move(*startup_request)]() {
+            boot_game(request);
+        });
+    } else if (emuenv.cfg.run_app_path.has_value()) {
         QTimer::singleShot(0, this, [this]() {
             const std::string title_id = *emuenv.cfg.run_app_path;
             emuenv.cfg.run_app_path.reset();
             boot_game(title_id);
         });
     }
+}
+
+void MainWindow::on_boot_game_triggered() {
+    const QString archive_path = QFileDialog::getOpenFileName(
+        this,
+        tr("Select Game Archive"),
+        QString(),
+        tr("NoNpDrm game archive (*.zip)"));
+    if (archive_path.isEmpty())
+        return;
+
+    packages::NoNpDrmZipOptions options;
+    options.sys_language = emuenv.cfg.current_config.sys_lang;
+    auto opened = packages::open_nonpdrm_zip_direct(QFileInfo(archive_path).filesystemFilePath(), options);
+    if (!opened) {
+        LOG_ERROR("Could not open direct-play ZIP: {}", opened.error().message);
+        QMessageBox::critical(this, tr("Could Not Boot Game"),
+            tr("Vita3K could not open the selected game archive.\n\n%1\n\n"
+               "Choose a valid NoNpDrm game ZIP and try again.")
+                .arg(QString::fromStdString(opened.error().message)));
+        return;
+    }
+
+    static_assert(sizeof(SceNpDrmLicense) == DIRECT_APP_LICENSE_SIZE);
+    auto direct_app = std::make_shared<DirectAppLaunch>();
+    direct_app->mount = std::move(opened->mount);
+    direct_app->app_version = std::move(opened->app_info.app_version);
+    direct_app->app_category = std::move(opened->app_info.app_category);
+    direct_app->content_id = std::move(opened->app_info.app_content_id);
+    direct_app->addcont = std::move(opened->app_info.app_addcont);
+    direct_app->savedata = std::move(opened->app_info.app_savedata);
+    direct_app->parental_level = std::move(opened->app_info.app_parental_level);
+    direct_app->short_title = std::move(opened->app_info.app_short_title);
+    direct_app->title = std::move(opened->app_info.app_title);
+    direct_app->title_id = std::move(opened->app_info.app_title_id);
+    std::memcpy(direct_app->license.data(), &opened->license, direct_app->license.size());
+
+    boot_game(AppLaunchRequest{
+        .app_path = direct_app->title_id,
+        .direct_app = std::move(direct_app),
+    });
 }
 
 void MainWindow::on_install_firmware_triggered() {
@@ -820,7 +870,7 @@ void MainWindow::apply_log_gui_settings() {
 std::optional<AppLaunchRequest> MainWindow::take_pending_app_launch_request() {
     auto request = emuenv.take_app_launch_request();
     if (request)
-        LOG_INFO("Handling in-process app relaunch for {} ({})", request->self_path, request->app_path);
+        LOG_INFO("Handling app launch request for {} ({})", request->self_path, request->app_path);
 
     return request;
 }
@@ -924,7 +974,9 @@ std::optional<AppLaunchRequest> MainWindow::boot_game_once(const AppLaunchReques
     const bool update_last_time_used = launch_request.reason != AppLaunchReason::LoadExec && !m_live_area_widget;
     if (!m_app_session.begin_launch(launch_request, update_last_time_used)) {
         QMessageBox::critical(this, tr("Error"),
-            tr("Could not find app '%1' in apps list.").arg(QString::fromStdString(launch_request.app_path)));
+            launch_request.direct_app
+                ? tr("Could not initialize direct-play app '%1'.").arg(QString::fromStdString(launch_request.app_path))
+                : tr("Could not find app '%1' in apps list.").arg(QString::fromStdString(launch_request.app_path)));
         return std::nullopt;
     }
     if (m_theme_manager)
@@ -1099,6 +1151,7 @@ void MainWindow::restart_running_app() {
 
     AppLaunchRequest relaunch_request{
         .app_path = emuenv.io.app_path,
+        .direct_app = emuenv.direct_app,
     };
     on_game_closed();
     boot_game(relaunch_request, false);

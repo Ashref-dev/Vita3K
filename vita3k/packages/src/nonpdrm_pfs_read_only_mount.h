@@ -17,18 +17,16 @@
 
 #pragma once
 
-#include <util/fs.h>
-#include <util/types.h>
+#include "nonpdrm_zip_source.h"
 
-enum class VitaIoDevice : int;
-struct IOState;
+#include <PfsMount.h>
 
-namespace vfs {
+#include <memory>
 
-using FileBuffer = std::vector<SceUInt8>;
+namespace packages::detail {
 
-bool read_file(VitaIoDevice device, FileBuffer &buf, const fs::path &vita_fs_path, const fs::path &vfs_file_path);
-bool read_app_file(FileBuffer &buf, const fs::path &vita_fs_path, const std::string &app_path, const fs::path &vfs_file_path);
-bool read_app_file(FileBuffer &buf, IOState &io, const fs::path &vita_fs_path, const fs::path &vfs_file_path, uint64_t maximum_size);
-SceSize get_directory_used_size(const VitaIoDevice device, const std::string &vfs_path, const fs::path &vita_fs_path);
-} // namespace vfs
+std::shared_ptr<const ReadOnlyMount> make_pfs_read_only_mount(
+    std::shared_ptr<const psvpfsparser::PfsMount> pfs,
+    std::shared_ptr<const NoNpDrmZipSource> source);
+
+}
