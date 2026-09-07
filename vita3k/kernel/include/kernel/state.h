@@ -60,6 +60,13 @@ typedef std::map<SceUID, ThreadStatePtr> ThreadStatePtrs;
 typedef std::map<SceUID, SceKernelModulePtr> SceKernelModuleInfoPtrs;
 typedef std::map<SceUID, CallbackPtr> CallbackPtrs;
 typedef unordered_map_fast<uint32_t, Address> ExportNids;
+// A NID hashes the function name alone, so same-named exports from different libraries collide.
+typedef unordered_map_fast<uint64_t, Address> LibExportNids;
+// The plain NID entry outlives taiHEN and HLE redirects, so its owner is tracked apart from its address.
+typedef unordered_map_fast<uint32_t, uint32_t> ExportNidOwners;
+constexpr uint64_t lib_export_key(uint32_t library_nid, uint32_t nid) {
+    return (static_cast<uint64_t>(library_nid) << 32) | nid;
+}
 
 typedef std::map<Address, uint32_t> NotFoundVars;
 typedef std::function<void(CPUState &cpu, uint32_t nid, SceUID thread_id)> CallImportFunc;
@@ -88,8 +95,13 @@ struct VarBindingInfo {
     uint32_t module_nid;
 };
 
+struct FuncBindingInfo {
+    Address entry_address;
+    uint32_t library_nid;
+};
+
 typedef std::multimap<uint32_t, VarBindingInfo> VarBindingInfos;
-typedef std::multimap<uint32_t, Address> FuncBindingInfos;
+typedef std::multimap<uint32_t, FuncBindingInfo> FuncBindingInfos;
 
 typedef std::map<uint32_t, uint32_t> ModuleUidByNid;
 
@@ -131,6 +143,8 @@ struct KernelState {
     // the variables in this block must be accessed by first locking export_nids_mutex
     std::mutex export_nids_mutex;
     ExportNids export_nids;
+    LibExportNids export_nids_by_lib;
+    ExportNidOwners export_nid_owners;
     FuncBindingInfos func_binding_infos;
     VarBindingInfos var_binding_infos;
     ModuleUidByNid module_uid_by_nid;
