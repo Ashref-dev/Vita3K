@@ -87,3 +87,8 @@ fastlane/readme.md
 
 # Copilot local config
 .github/copilot-instructions.md
+
+# Local agent and developer files
+/.omo/
+/AGENTS.md
+/dev-build.sh
