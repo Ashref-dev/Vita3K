@@ -31,7 +31,6 @@ namespace renderer::vulkan {
 VKContext::VKContext(VKState &state, MemState &mem)
     : state(state)
     , mem(mem)
-    , vertex_stream_ring_buffer(vk::BufferUsageFlagBits::eVertexBuffer, MiB(/*128*/ 64))
     , index_stream_ring_buffer(vk::BufferUsageFlagBits::eIndexBuffer, MiB(64))
     , vertex_uniform_stream_ring_buffer(vk::BufferUsageFlagBits::eStorageBuffer, MiB(/*256*/ 64))
     , fragment_uniform_stream_ring_buffer(vk::BufferUsageFlagBits::eStorageBuffer, MiB(/*256*/ 64))
@@ -43,8 +42,6 @@ VKContext::VKContext(VKState &state, MemState &mem)
     // specify the alignment
     // for the index buffer, we only have 16 or 32bit types
     index_stream_ring_buffer.alignment = sizeof(uint32_t);
-    // for the vertex buffer, nothing should need more alignment than a vec4
-    vertex_stream_ring_buffer.alignment = 4 * sizeof(float);
 
     const uint32_t uniform_alignment = static_cast<uint32_t>(state.physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const uint32_t storage_alignment = static_cast<uint32_t>(state.physical_device_properties.limits.minStorageBufferOffsetAlignment);
@@ -53,20 +50,16 @@ VKContext::VKContext(VKState &state, MemState &mem)
     vertex_info_uniform_buffer.alignment = uniform_alignment;
     fragment_info_uniform_buffer.alignment = uniform_alignment;
 
-    if (state.features.enable_memory_mapping) {
-        // use the default buffer
-        std::fill_n(vertex_stream_buffers, SCE_GXM_MAX_VERTEX_STREAMS, state.default_buffer.buffer);
+    std::fill_n(vertex_stream_buffers, SCE_GXM_MAX_VERTEX_STREAMS, state.default_buffer.buffer);
 
+    if (state.features.enable_memory_mapping) {
         // also initialize the gpu wait thread
         gpu_request_wait_thread = std::thread(&VKContext::wait_thread_function, this, std::ref(mem));
     } else {
         // these are not needed when using memory mapping
-        vertex_stream_ring_buffer.create();
         index_stream_ring_buffer.create();
         vertex_uniform_stream_ring_buffer.create();
         fragment_uniform_stream_ring_buffer.create();
-
-        std::fill_n(vertex_stream_buffers, SCE_GXM_MAX_VERTEX_STREAMS, vertex_stream_ring_buffer.handle());
     }
 
     vertex_info_uniform_buffer.create();
