@@ -591,6 +591,7 @@ void new_frame(VKContext &context) {
 
     device.resetCommandPool(frame.prerender_pool);
     device.resetCommandPool(frame.render_pool);
+    frame.vertex_stream_buffer.reset();
 
     // set the position in the used descriptor queue back to the beginning
     for (int i = 0; i < 16; i++) {

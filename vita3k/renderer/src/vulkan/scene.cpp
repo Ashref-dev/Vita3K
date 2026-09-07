@@ -306,8 +306,8 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
                     restride_stream(stream, stream_size, vertex_program.streams[i].stride);
                 }
 #endif
-                context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, stream_size, stream);
-                context.vertex_stream_offsets[i] = context.vertex_stream_ring_buffer.data_offset;
+                std::tie(context.vertex_stream_buffers[i], context.vertex_stream_offsets[i]) =
+                    context.state.frame().vertex_stream_buffer.upload(context.state.allocator, stream_size, stream);
 
 #ifdef __APPLE__
                 if (restride) {
