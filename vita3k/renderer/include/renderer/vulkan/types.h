@@ -21,6 +21,7 @@
 #include <renderer/types.h>
 #include <shader/uniform_block.h>
 #include <vkutil/objects.h>
+#include <vkutil/vertex_buffer_pool.h>
 
 struct MemState;
 
@@ -100,6 +101,8 @@ struct FrameObject {
     // we need to have a specific prerender pool because prerender command buffer
     // can be reset if we use too many new textures at once
     vk::CommandPool prerender_pool;
+
+    vkutil::VertexBufferPool vertex_stream_buffer;
 
     std::vector<vk::Fence> rendered_fences;
     // equals to context.frame_timestamp when the frame object is used
