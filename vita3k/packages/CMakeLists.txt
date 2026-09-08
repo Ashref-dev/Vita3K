@@ -3,6 +3,7 @@ add_library(packages STATIC
             src/license.cpp
             src/nonpdrm_pfs_read_only_mount.cpp
             src/nonpdrm_pfs_read_only_mount.h
+            src/read_only_block_cache.h
             src/nonpdrm_zip_direct.cpp
             src/nonpdrm_zip_source.cpp
             src/nonpdrm_zip_source.h
@@ -37,4 +38,7 @@ if(NOT ANDROID)
         tests/nonpdrm_zip_direct_tool.cpp
     )
     target_link_libraries(packages-nonpdrm-zip-tool PRIVATE codec packages)
+    add_executable(packages-read-cache-tests tests/read_only_block_cache_tests.cpp)
+    target_link_libraries(packages-read-cache-tests PRIVATE io googletest)
+    add_test(NAME packages-read-cache COMMAND packages-read-cache-tests)
 endif()
