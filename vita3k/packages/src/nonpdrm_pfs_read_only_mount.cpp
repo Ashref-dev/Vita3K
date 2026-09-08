@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include "nonpdrm_pfs_read_only_mount.h"
+#include "read_only_block_cache.h"
 
 #include <algorithm>
 #include <expected>
@@ -69,9 +70,15 @@ public:
             return size_t{ 0 };
         const auto count = static_cast<size_t>(std::min<uint64_t>(output.size(), opened->size() - offset));
         if (count != 0) {
-            const auto read = opened->read_at(offset, output.first(count));
+            const auto read = read_cache_.read(opened->path(), opened->size(), offset, output.first(count),
+                [&opened](uint64_t position, std::span<uint8_t> destination) -> std::expected<size_t, ReadOnlyMountError> {
+                    const auto result = opened->read_at(position, destination);
+                    if (!result)
+                        return std::unexpected(translate_error(result.error().code));
+                    return destination.size();
+                });
             if (!read)
-                return std::unexpected(translate_error(read.error().code));
+                return std::unexpected(read.error());
         }
         if (!source_->check_unchanged())
             return std::unexpected(ReadOnlyMountError::io_error);
@@ -104,6 +111,7 @@ public:
 private:
     std::shared_ptr<const psvpfsparser::PfsMount> pfs_;
     std::shared_ptr<const NoNpDrmZipSource> source_;
+    ReadOnlyBlockCache read_cache_{64 * 1024 * 1024};
 };
 
 } // namespace
