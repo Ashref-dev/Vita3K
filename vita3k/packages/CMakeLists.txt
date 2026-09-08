@@ -38,6 +38,10 @@ if(NOT ANDROID)
         tests/nonpdrm_zip_direct_tool.cpp
     )
     target_link_libraries(packages-nonpdrm-zip-tool PRIVATE codec packages)
+    add_executable(packages-nonpdrm-zip-benchmark EXCLUDE_FROM_ALL
+        tests/nonpdrm_zip_read_benchmark.cpp
+    )
+    target_link_libraries(packages-nonpdrm-zip-benchmark PRIVATE miniz packages psvpfsparser)
     add_executable(packages-read-cache-tests tests/read_only_block_cache_tests.cpp)
     target_link_libraries(packages-read-cache-tests PRIVATE io googletest)
     add_test(NAME packages-read-cache COMMAND packages-read-cache-tests)
