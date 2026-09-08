@@ -85,9 +85,9 @@ private:
     std::expected<void, NoNpDrmZipError> check_unchanged_unlocked() const;
     const Entry *find_entry(std::string_view path) const;
 
-    std::filesystem::path path_;
+    const std::filesystem::path path_;
     std::FILE *file_;
-    Snapshot snapshot_;
+    const Snapshot snapshot_;
     mutable std::mutex mutex_;
     mutable mz_zip_archive archive_{};
     mutable mz_zip_reader_extract_iter_state *deflate_iterator_ = nullptr;

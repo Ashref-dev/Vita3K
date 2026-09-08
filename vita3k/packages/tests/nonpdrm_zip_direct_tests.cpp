@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -272,6 +273,30 @@ void accepts_bare_and_app_prefixed_title_roots() {
     }
 }
 
+void rejects_source_changes_after_successful_read() {
+    for (const bool change_size : {false, true}) {
+        TestContext context;
+        ZipTestBuilder builder;
+        builder.add("TITLE/data.bin", "verified data");
+        const auto path = context.write(builder);
+        const auto source = packages::detail::NoNpDrmZipSource::create(path, 4096);
+        if (!source)
+            throw std::runtime_error("source-change fixture could not be opened");
+        std::array<uint8_t, 4> output{};
+        if (!(*source)->read_at("data.bin", 0, output))
+            throw std::runtime_error("initial source-change fixture read failed");
+        if (change_size)
+            std::filesystem::resize_file(path, std::filesystem::file_size(path) + 1);
+        else
+            std::filesystem::last_write_time(path, std::filesystem::last_write_time(path) + std::chrono::seconds(10));
+        const auto unchanged = (*source)->check_unchanged();
+        if (unchanged || unchanged.error().code != packages::NoNpDrmZipErrorCode::source_changed)
+            throw std::runtime_error("source modification was not detected");
+        if ((*source)->read_at("data.bin", 0, output))
+            throw std::runtime_error("modified source remained readable");
+    }
+}
+
 void accepts_zip64_end_records_before_the_end_record() {
     TestContext context;
     ZipTestBuilder builder;
@@ -424,7 +449,7 @@ void validates_deep_hash_tree_without_recursion() {
 
 int main() {
     using Test = std::pair<std::string_view, void (*)()>;
-    const std::array<Test, 21> tests{ {
+    const std::array<Test, 22> tests{ {
         { "rejects_empty_archives", rejects_empty_archives },
         { "rejects_absolute_and_parent_paths", rejects_absolute_and_parent_paths },
         { "rejects_nul_in_entry_name", rejects_nul_in_entry_name },
@@ -436,6 +461,7 @@ int main() {
         { "accepts_utf8_entry_names", accepts_utf8_entry_names },
         { "reads_deflated_entries_forward_and_backward", reads_deflated_entries_forward_and_backward },
         { "accepts_bare_and_app_prefixed_title_roots", accepts_bare_and_app_prefixed_title_roots },
+        { "rejects_source_changes_after_successful_read", rejects_source_changes_after_successful_read },
         { "accepts_zip64_end_records_before_the_end_record", accepts_zip64_end_records_before_the_end_record },
         { "rejects_multiple_title_roots_under_a_shared_app_folder", rejects_multiple_title_roots_under_a_shared_app_folder },
         { "rejects_sfo_install_directory_traversal", rejects_sfo_install_directory_traversal },

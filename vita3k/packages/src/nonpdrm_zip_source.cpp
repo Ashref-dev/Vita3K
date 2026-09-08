@@ -378,7 +378,7 @@ std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::check_unchanged_unlocked(
 }
 
 std::expected<void, NoNpDrmZipError> NoNpDrmZipSource::check_unchanged() const {
-    std::scoped_lock lock(mutex_);
+    // These immutable snapshot checks do not access the shared ZIP stream/iterator.
     return check_unchanged_unlocked();
 }
 
